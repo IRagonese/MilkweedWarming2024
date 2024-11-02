@@ -1,0 +1,235 @@
+---
+title: "ibutton_Temp"
+author: "Isabella Ragonese"
+date: "2024-11-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#load libraries
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(rstatix)
+library(ggpubr)
+library(lubridate)
+library(Hmisc)
+library(lme4)
+library(glmmTMB)
+library(sjPlot)
+library(car)
+library(MuMIn)
+library(MASS)
+```
+
+## Temp data
+      
+#read in raw data with ambient and elevated ibutton readings
+```{r}
+Ambient<-read.csv("AverageAmbient_TEMP2.csv")
+Elevated<-read.csv("AverageElevated_TEMP.csv")
+```
+
+#transform dataframes to long format
+```{r}
+A1<-mutate(Ambient, Temp_treatment = "Ambient")
+E1<-mutate(Elevated, Temp_treatment = "Elevated")
+E1$Stdev = E1$StandardDev
+
+A1long<-pivot_longer(A1,
+     cols = c("H1_temp","H6_10min_ahead","H7_11min_ahead","H8_3min_ahead", "H11_3min_behind","H12_2min_behind", "T1_5min_behind","T2_8min_ahead","T3_8min_ahead","T11_5min_ahead","T12_2min_behind","T13_8min_behind","T14_9min_ahead","T15_6min_behind","T17_7min_ahead" ),
+     names_to = "ibuttonID",
+     values_to ="Temp")
+
+E1long<-pivot_longer(E1,
+                     cols = c("H2_temp","H3_9min_ahead","H4_match","H5_1min_ahead","H9_1min_ahead","H10_6min_ahead","T4_2min_behind","T5_4min_behind","T6_5min_ahead","T8_9min_ahead","T9_3min_ahead","T16_8min_behind","T18_3min_ahead","T19_6min_behind","T20_1min_behind"),
+                     names_to = "ibuttonID",
+                     values_to ="Temp")
+A1long<-A1long[,-4]
+A1long<-A1long[,-4]
+E1long<-E1long[,-4]
+E1long<-E1long[,-4]
+E1long<-E1long[,-5]
+
+A1_E1_long<-rbind(A1long,E1long)
+
+A1_E1_long$Date<-as.Date.character(A1_E1_long$Date.Time, tryFormats ="%m/%d/%Y %H:%M")
+
+#day vs. night temps 
+dates<-A1_E1_long$Date.Time
+dates2 <- as.POSIXct(dates, format = "%m/%d/%Y %H:%M")
+A1_E1_long$Hour<-format(dates2, format="%H")
+A1_E1_long$Hour<-as.numeric(A1_E1_long$Hour)
+
+A1_E1_long$DayNight<-ifelse((A1_E1_long$Hour>6 & A1_E1_long$Hour<20),"Day","Night") #7am-7pm
+
+Am_El_day<-A1_E1_long %>% filter(DayNight=="Day")
+Am_El_night<-A1_E1_long %>% filter(DayNight=="Night")
+
+```
+
+#remove outliers from ibutton columns (or temp in Am_El_day and night dfs)
+```{r}
+outliers<-identify_outliers(as.data.frame(A1_E1_long$Temp))
+outliers
+#100 outliers; minimum = 41.572
+
+#A1_E1_long_subset<-subset(A1_E1_long, Temp < 41.572)
+
+#no H2
+#A1_E1_long_noH2<-A1_E1_long %>% filter(ibuttonID != "H2_temp")
+
+#outliers<-identify_outliers(as.data.frame(A1_E1_long_noH2$Temp))
+#outliers
+#7 ext outliers; minimum = 42.086
+
+#A1_E1_long_noH2_test<-subset(A1_E1_long_noH2, Temp < 42.086) #eliminates 12 measurements above 40C
+
+#A1_E1_long<-A1_E1_long_noH2_test
+
+A1_E1_long_subset<-subset(A1_E1_long, Temp < 42.086)
+
+A1_E1_long<-A1_E1_long_subset
+
+Am_El_day<-A1_E1_long %>% filter(DayNight=="Day")
+Am_El_night<-A1_E1_long %>% filter(DayNight=="Night")
+
+```
+
+#plot difference in mean daily temp
+```{r}
+#A1_E1_long_noH2<-A1_E1_long %>% filter(ibuttonID != "H2_temp")
+
+Treat_Date_avgtemps<-A1_E1_long %>%
+  group_by(Temp_treatment, Date) %>%
+  get_summary_stats(Temp, type = "mean_sd")
+
+Treat_Date_avgtemps$se=Treat_Date_avgtemps$sd/sqrt(Treat_Date_avgtemps$n)
+
+Treat_Date_avgtemps=filter(Treat_Date_avgtemps,Date!="2021-06-14") #pre-field date
+
+ggplot(Treat_Date_avgtemps, aes(x=Date,y=mean))+
+  geom_line(aes(color=Temp_treatment))+
+  geom_ribbon(aes(y=mean, ymin=mean-se, ymax=mean+se, fill=Temp_treatment), alpha=0.2)+
+  theme_bw()+
+  labs(x="Date",y="mean daily temperature (+/- standared error)")+
+  scale_color_manual(values = c("blue","goldenrod"))+
+  scale_fill_manual(values = c("blue","goldenrod"))
+
+ggplot(Treat_Date_avgtemps, aes(x=Date,y=mean,color=Temp_treatment))+
+  geom_line()+
+  geom_ribbon(aes(y=mean, ymin=mean-sd, ymax=mean+sd, fill=Temp_treatment), alpha=0.2)+
+  labs(x="Date",y="mean daily temperature (+/- standared dev)")+
+  theme_bw()+
+  scale_color_manual(values = c("blue","goldenrod"))+
+  scale_fill_manual(values = c("blue","goldenrod"))
+```
+
+#create df with mean and sd temp for each ibutton (full experiment)
+```{r}
+
+per_ibutton_avgtemps_full<-A1_E1_long %>%
+  group_by(ibuttonID, Temp_treatment) %>%
+  get_summary_stats(Temp, type = "mean_sd")
+
+per_ibutton_avgtemps_full = per_ibutton_avgtemps_full %>% separate(col=ibuttonID,into = c("ibutton_ID", "lag","relative"), "_")
+per_ibutton_avgtemps_full$se=per_ibutton_avgtemps_full$sd/sqrt(per_ibutton_avgtemps_full$n)
+
+#won't work without H2
+#per_ibutton_avgtemps_full$PlotNum<-c(8,15,12,14,9,13,24,23,20,6,31,19,16,29,2,18,25,4,32,27,17,30,10,21,22,26,28,3,11,5)
+
+```
+
+#bar plot per ibutton of mean temp
+```{r}
+button_order<-c("T12","T15","H7","H1","T2","H11","H12","T1","T13","H6","T3","T14","T17","T11","H8","T6","T9","H2","T8","H3","H10","T18","H9","T20","H5","H4","T4","T5","T19","T16")
+
+ggplot(per_ibutton_avgtemps_full)+
+geom_bar(aes(x = factor(ibutton_ID, button_order), y = mean, 
+             fill = Temp_treatment), stat = "identity", show.legend = FALSE)+
+  geom_errorbar(aes(x=ibutton_ID, y=mean, ymin=mean-se, ymax=mean+se), width=0.5)+
+  labs(x="ibutton",y="mean temperature")+
+  scale_fill_manual(values = c("blue","goldenrod"))
+
+```
+
+#create df for mean and sd temp for each DAY
+```{r}
+per_ibutton_Date_avgtemps<-A1_E1_long %>%
+  group_by(ibuttonID, Temp_treatment, Date) %>%
+  get_summary_stats(Temp, type = "mean_sd")
+  
+
+per_ibutton_Date_avgtemps$se=per_ibutton_Date_avgtemps$sd/sqrt(per_ibutton_Date_avgtemps$n)
+
+per_ibutton_Date_avgtemps = per_ibutton_Date_avgtemps %>% separate(col=ibuttonID,into = c("ibutton_ID", "lag","relative"), "_")
+
+per_ibutton_Date_avgtemps=filter(per_ibutton_Date_avgtemps,Date!="2021-06-14")
+
+# per_ibutton_Date_avgtemps=filter(per_ibutton_Date_avgtemps,ibutton_ID!="H2")
+# per_ibutton_Date_avgtemps=filter(per_ibutton_Date_avgtemps,ibutton_ID!="H1")
+
+ggplot(per_ibutton_Date_avgtemps, aes(x=Date,y=mean,group=ibutton_ID,color=Temp_treatment))+
+  geom_line()+
+  #geom_ribbon(aes(y=mean, ymin=mean-se, ymax=mean+se, fill=Temp_treatment), alpha=.2)+
+  labs(x="Date",y="mean temperature")+
+  scale_color_manual(values = c("blue","goldenrod"))
+
+```
+
+#repeated measures anova compare ambient and elevated mean daily temp accounting for ibutton_ID
+http://agroninfotech.blogspot.com/2020/06/two-way-repeated-measures-analysis-in-r.html  
+```{r}
+
+#per_ibutton_Date_avgtemps_02<-filter(per_ibutton_Date_avgtemps, ibutton_ID!="H1"&ibutton_ID!="H2") #14 ibuttons in each treatment
+
+#per_ibutton_Date_avgtemps_02
+
+pwc <- per_ibutton_Date_avgtemps %>%
+group_by(Date) %>%
+pairwise_t_test(
+mean ~ Temp_treatment, paired = TRUE,
+p.adjust.method = "bonferroni"
+)
+data.frame(pwc) #each day, mean temp in ambient plots is different from elevated
+
+```
+
+#try anova with A vs. E daytime temps
+
+**excluding ibutton H2 due to consistent higher temperature readings**
+
+```{r}
+
+#Am_El_day = Am_El_day %>% separate(col=ibuttonID,into = c("ibutton_ID", "lag","relative"), "_")
+#Am_El_day <- filter(Am_El_day, ibutton_ID!="H1"&ibutton_ID!="H2")
+Am_El_day <- filter(Am_El_day, ibutton_ID!="H2")
+
+model.aov <- aov(Temp ~ Temp_treatment*Date + Error(ibutton_ID/(Date)), data=Am_El_day)
+summary(model.aov)
+
+#Am_El_night = Am_El_night %>% separate(col=ibuttonID,into = c("ibutton_ID", "lag","relative"), "_")
+#Am_El_night <- filter(Am_El_night, ibutton_ID!="H1"&ibutton_ID!="H2")
+Am_El_night <- filter(Am_El_night, ibutton_ID!="H2")
+
+
+model.aov <- aov(Temp ~ Temp_treatment*Date + Error(ibutton_ID/(Date)), data=Am_El_night)
+summary(model.aov)
+
+meantempday<-Am_El_day %>% group_by(Temp_treatment) %>% 
+  summarise(meanTemp=mean(Temp),
+            seTemp=sd(Temp)/sqrt(n()))
+
+meantempnight<-Am_El_night %>% group_by(Temp_treatment) %>% 
+  summarise(meanTemp=mean(Temp),
+            seTemp=sd(Temp)/sqrt(n()))
+
+model.aov <- aov(mean ~ Temp_treatment*Date + Error(ibutton_ID/(Date)), data=per_ibutton_Date_avgtemps)
+summary(model.aov)
+
+```
+
