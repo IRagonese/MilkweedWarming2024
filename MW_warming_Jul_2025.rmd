@@ -1,0 +1,689 @@
+---
+title: "MW_warming_Nov_2024"
+author: "Isabella Ragonese"
+date: "2024-11-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Description: Data analysis for a 2021 field experiment exploring the effects of elevated temperature, milkweed host plant species, and the interaction between milkweed and temperature on monarch traits and infection.
+
+##inputs: 
+# temperature data: "per_ibutton_avgtemps_full.csv" ; 
+# monarch data: "MWwarming_comp_May16.csv"
+# plant data: "UGA_Cardenolide_Analysis_March2023_tropical.csv"
+
+##outputs: tables and figures in the main text and supplement
+
+##Note: Temperature and humidity data analysis completed in separate rmd files: ibutton_temp.rmd, ibutton_humidity.rmd
+# inputs:Temperature data: "AverageAmbient_TEMP2.csv" "AverageElevated_TEMP.csv" ; Hum idity data: "AverageAmbient_RelHum.csv" "AverageElevated_RelHum.csv" ;
+
+
+#load libraries
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(rstatix)
+library(ggpubr)
+library(lubridate)
+library(Hmisc)
+library(lme4)
+#library(glmmTMB)
+library(sjPlot)
+library(car)
+library(MuMIn)
+#library(MASS)
+library(emmeans)
+library(DescTools)
+#library(performance)
+library(lmtest)
+library(scales)
+```
+
+# functions
+```{r, include=FALSE}
+#Bolker et al. overdispersion function
+
+overdisp_fun <- function(model) {
+    rdf <- df.residual(model)
+    rp <- residuals(model,type="pearson")
+    Pearson.chisq <- sum(rp^2)
+    prat <- Pearson.chisq/rdf
+    pval <- pchisq(Pearson.chisq, df=rdf, lower.tail=FALSE)
+    c(chisq=Pearson.chisq,ratio=prat,rdf=rdf,p=pval)
+}
+
+```
+
+#########################################################################
+
+## Read in data for monarch, OE and milkweed traits
+```{r, include=FALSE, echo=FALSE}
+#main dataset
+mw2021<-read.csv("MWwarming_comp_May16.csv")
+
+#cardenolide measures
+cardenolides<-read.csv("UGA_Cardenolide_Analysis_March2023_tropical.csv")#
+
+cardenolides1<-mw2021 %>% dplyr::select(Temp,Plant_ID) %>% left_join(cardenolides,mw2021,by="Plant_ID")
+#monarch data with complete cardenolide data
+card2<-distinct(cardenolides1) %>% filter(!is.na(total.card.conc))
+
+#subsets
+mw.inf <- subset(mw2021, InfectionStatus==1)
+mw.inoc <- subset(mw2021, OE_treatment=="infected")
+#comprehensive dataframe with just control individuals
+mw.control <- subset(mw2021, OE_treatment=="control", InfectionStatus!=1) 
+mw.trop <- subset(mw2021, Milkweed=="tropical")
+mw.swamp <- subset(mw2021, Milkweed=="swamp")
+
+#read in daily average temps for each ibutton
+per_ibutton_avgtemps_full<-read.csv("per_ibutton_avgtemps_full.csv")
+
+#join avg temp of plot to main dataframe with per_ibutton_avgtemps_full df
+mw2021_join<-left_join(mw2021, per_ibutton_avgtemps_full, by="PlotNum")#add overall mean temp
+
+card2$PlotNum<-card2$plot.num
+card3<-left_join(card2, per_ibutton_avgtemps_full, by="PlotNum")#add overall mean temp to cardenolide data
+
+##levels of factors
+options(contrasts=c("contr.treatment","contr.poly"))
+contr.treatment(unique(mw2021$Milkweed))
+contr.treatment(unique(mw2021$Temp))
+
+
+```
+
+################################################
+**fitness metrics**
+
+## Development to pupation
+```{r}
+pupdev_table<-mw2021 %>% 
+  group_by(Plant_ID) %>% 
+  dplyr::summarise(mean_dev_time = mean(Inoc_to_pupa, na.rm=T),
+                   Temp = first(Temp),
+                   Milkweed = first(Milkweed),
+                   Lineage = first(Lineage),
+                   OE_strain = first(OE_strain),
+                   OE_treatment = first(OE_treatment))
+
+m0<-lm(log10(mean_dev_time) ~ 1, data = pupdev_table) #null hypothesis
+m1<-lm(log10(mean_dev_time) ~ Temp + Milkweed + OE_treatment, data = pupdev_table) #time to pupation depends on main effects of temperature, milkweed sp, and/or inoculation status
+m2<- lm(log10(mean_dev_time) ~ Temp*Milkweed + OE_treatment, data = pupdev_table) #interactions between temp and milkweed and/or inoculation and milkweed explain time to pupation
+
+AICc(m0,m1,m2)
+
+summary(m1)
+#shorter development times for monarchs on swamp or in ambient plots 
+
+#check normality and variance
+plot(m1)
+shapiro.test(resid(m1)) #normal residuals
+bptest(m1) #homogeneity
+overdisp_fun(m1) #not overdispersed
+
+tab_model(m1, transform = NULL, show.stat = TRUE, show.se = TRUE, show.ci = FALSE)
+
+# ggplot(pupdev_table, aes(x=factor(Temp), y=log10(mean_dev_time), fill=Milkweed)) + 
+#   geom_boxplot(alpha=0.5, outliers=FALSE)+ #outliers included in jitter
+#   geom_jitter(position = position_jitterdodge(jitter.height = 0.01, jitter.width = 0.3), alpha=0.7, aes(colour=Milkweed, shape=Milkweed))+
+#   labs(fill = "Milkweed", x = "temperature treatment", y = "time to pupation (log10(days))")+
+#   theme_bw()+
+#   scale_fill_manual(values = c("darkgreen","darkorange"))+
+#   scale_colour_manual(values = c("darkgreen","darkorange"))
+
+#use scale_y_log10 for y axis
+
+ggplot(pupdev_table, aes(x=factor(Temp), y=(mean_dev_time), fill=Milkweed)) + 
+  geom_boxplot(alpha=0.5, outliers=FALSE)+ #outliers included in jitter
+  geom_jitter(position = position_jitterdodge(jitter.height = 0.01, jitter.width = 0.3), alpha=0.7, aes(colour=Milkweed, shape=Milkweed))+
+  labs(fill = "Milkweed", x = "temperature treatment", y = "time to pupation (days)")+
+  theme_bw()+
+  scale_y_log10(
+    breaks = c(10, 12, 14, 16, 18, 20),
+    labels = c("10", "12", "14", "16", "18", "20")
+  ) +
+  scale_fill_manual(values = c("darkgreen","darkorange"))+
+  scale_colour_manual(values = c("darkgreen","darkorange"))
+
+
+
+
+```
+
+## Survival probability
+```{r}
+
+m0<-glm(Surv_adult ~ 1, data = mw2021, family = binomial)
+m1<-glm(Surv_adult ~ Temp + Milkweed + OE_treatment, data = mw2021, family = binomial)
+m2<-glm(Surv_adult ~ Temp*Milkweed + OE_treatment, data = mw2021, family = binomial)
+
+
+AICc(m0,m1,m2)
+
+#model m2 with interaction is slightly better
+
+tab_model(m2, transform = NULL, show.stat = TRUE, show.se = TRUE, show.ci = FALSE)
+
+summary(m2)#temp*milkweed near signif. --> post hoc test for estimated marginal means emmeans?
+exp(coefficients(m2))
+
+#calculate R-squared for model
+PseudoR2(m2,which="McFadden") #0.073
+PseudoR2(m2,which="Nagelkerke") #0.094
+PseudoR2(m2,which="Tjur")#0.041 - in table from tab_model()
+
+em <- emmeans(m2, specs ="Milkweed", by ="Temp")
+contrast(em, "pairwise", adjust = "Tukey")
+
+require("ggplot2")
+emmip(m2, Milkweed ~ Temp, CIs = TRUE, type = "response") +
+  theme_bw()+
+  scale_colour_manual(values = c("darkgreen","darkorange"))
+    #geom_point(aes(x = Temp, y = Surv_adult), data = mw2021, pch = 2, color = "blue")
+
+
+#########################
+#plot
+survadult <-  #table of survival to eclosion by treatment 
+  mw2021  %>% 
+  group_by(Temp, Milkweed, OE_treatment) %>% 
+  dplyr::summarise( propsurv_all= sum(Surv_adult, na.rm=T)/n(),
+                    seprop_all = sqrt(propsurv_all*(1-propsurv_all)/n()))
+
+ggplot(survadult, aes(x=Temp, y=propsurv_all)) + 
+  theme_bw()+
+  geom_errorbar(data = survadult, aes(ymin=propsurv_all-seprop_all, 
+                                       ymax=propsurv_all+seprop_all,
+                                                colour=Milkweed,shape=OE_treatment),width=0.1,
+                position=position_dodge(0.4))+
+  geom_point(aes(Temp,propsurv_all, colour=Milkweed,shape=OE_treatment),
+               position=position_dodge(0.4), cex=3)+
+  labs(fill = "Milkweed", x = "temperature treatment", y = "survival probability")+
+  scale_fill_manual(values = c("#4E6358","#FC923A"))+
+  scale_colour_manual(values = c("#4E6358","#FC923A"))
+
+#not showing OE treatment
+survadult <-  #table of survival to eclosion by treatment 
+  mw2021  %>% 
+  group_by(Temp, Milkweed) %>% 
+  dplyr::summarise( propsurv_all= sum(Surv_adult, na.rm=T)/n(),
+                    seprop_all = sqrt(propsurv_all*(1-propsurv_all)/n()))
+
+ggplot(survadult, aes(x=Temp, y=propsurv_all)) + 
+  theme_bw()+
+  geom_errorbar(data = survadult, aes(ymin=propsurv_all-seprop_all, 
+                                       ymax=propsurv_all+seprop_all,
+                                                colour=Milkweed),width=0.1,
+                position=position_dodge(0.4))+
+  geom_point(aes(Temp,propsurv_all, colour=Milkweed, shape=Milkweed),
+               position=position_dodge(0.4), cex=3)+
+  labs(fill = "Milkweed", x = "temperature treatment", y = "survival probability")+
+  scale_fill_manual(values = c("darkgreen","darkorange"))+
+  scale_colour_manual(values = c("darkgreen","darkorange"))
+
+
+```
+
+## Pupal mass
+```{r}
+
+m0<-lm(PupalMass ~ 1, data = mw2021)
+m1<-lm(PupalMass ~ Temp + Milkweed + OE_treatment, data = mw2021)
+m2<-lm(PupalMass ~ Temp*Milkweed + OE_treatment, data = mw2021)
+
+
+AICc(m0,m1,m2)
+
+summary(m2) #infection status non-significant in predicting pupal mass, R2 low
+tab_model(m2, transform = NULL, show.stat = TRUE, show.se = TRUE, show.ci = FALSE)
+
+#check normality and variance
+plot(m2)
+shapiro.test(resid(m2)) #normal residuals
+bptest(m2) #homogeneity
+overdisp_fun(m2) #not overdispersed
+
+ggplot(mw2021, aes(x=Milkweed, y=PupalMass, fill=OE_treatment)) + 
+  geom_boxplot(notch = TRUE, alpha=0.6)+
+  geom_jitter(position = position_jitterdodge(jitter.height = 0.01, jitter.width = 0.3), alpha=0.7, aes(colour=OE_treatment))+
+  labs(fill = "OE treatment", x = "Milkweed", y = "Pupal mass (g)")+
+  scale_fill_manual(values = c("gray","brown"))+
+  scale_colour_manual(values = c("gray","brown"))+
+  theme_bw()
+
+
+ggplot(mw2021, aes(x=OE_treatment, y=PupalMass, fill=OE_treatment)) + 
+  geom_boxplot(alpha=0.6)+
+  geom_jitter(position = position_jitterdodge(jitter.height = 0.01, 
+              jitter.width = 0.3), alpha=0.7, aes(colour=OE_treatment))+
+  labs(x = "OE", y = "Pupal mass (g)")+
+  scale_fill_manual(values = c("gray","brown"))+
+  scale_colour_manual(values = c("gray","brown"))+
+  theme_bw()
+
+```
+
+## forewing length
+```{r}
+mw2021_adult<-filter(mw2021, mw2021$Surv_adult==1)
+
+m0<-lm(ForewingLength.mm. ~ 1, data = mw2021_adult)
+m1<-lm(ForewingLength.mm. ~ Temp + Milkweed + OE_treatment + Sex, data = mw2021_adult)
+m2<-lm(ForewingLength.mm. ~ Temp*Milkweed + OE_treatment + Sex, data = mw2021_adult)
+
+
+AICc(m0,m1,m2)#m1 with no interaction better than null
+
+summary(m1) #sex, OE treat, milkweed all matter
+tab_model(m1, transform = NULL, show.stat = TRUE, show.se = TRUE, show.ci = FALSE)
+
+#check normality and variance
+plot(m1)
+shapiro.test(resid(m1)) #
+bptest(m1) #homogeneity
+overdisp_fun(m1) #overdispersed
+
+ggplot(mw2021_adult, aes(x=Sex, y=ForewingLength.mm., fill=Milkweed)) + 
+  geom_boxplot()+
+  labs(fill = "Milkweed", x = "Infection treatment", y = "Forewing length (mm)")+
+  scale_fill_manual(values = c("darkgreen", "orange"))+ theme_bw()
+
+ggplot(mw2021_adult, aes(x=OE_treatment, y=ForewingLength.mm., fill=OE_treatment)) + 
+  geom_boxplot()+
+  labs(fill = "OE_treatment", x = "Infection treatment", y = "Forewing length (mm)")+
+  scale_fill_manual(values = c("gray", "brown"))
+
+```
+
+#Adult longevity (starvation resistance)
+```{r}
+#we know that infection decreases adult longevity, but do elevated temperatures or either of the milkweed species impact the difference between healthy and infected?
+
+m0<-glm.nb(AdultLongevity ~ 1, data = mw2021_adult) #null
+m1<-glm.nb(AdultLongevity ~ OE_treatment + PupalMass + Sex + Temp + Milkweed, data = mw2021_adult) #variables that could impact longevity
+m2<-glm.nb(AdultLongevity ~ OE_treatment*Temp + Milkweed + PupalMass + Sex, data = mw2021_adult)
+m3<-glm.nb(AdultLongevity ~ OE_treatment*Milkweed + Temp + PupalMass + Sex, data = mw2021_adult)
+
+
+#model with OE_treatment * temp interaction is best
+AICc(m0,m1,m2,m3)
+
+summary(m2) #OE treatment, and the interaction w/ temp significant - elevated temp exacerbates infection cost to longevity
+tab_model(m2, transform = NULL, show.stat = TRUE, show.se = TRUE, show.ci = FALSE)
+
+#model check
+overdisp_fun(m2) #-->looks ok (poisson was overdispersed)
+shapiro.test(resid(m2))
+
+####################################
+ggplot(mw2021_adult, aes(x=OE_treatment, y=AdultLongevity, fill=Temp)) + 
+  geom_boxplot(alpha=0.5)+
+  labs(fill = "Temp", x = "infection treatment", y = "adult starvation resistance (longevity in days))")+
+  geom_jitter(position = position_jitterdodge(jitter.height = 0.01, 
+              jitter.width = 0.25), alpha=0.7, aes(colour=Temp, shape=Temp))+
+  theme_bw()+
+  scale_fill_manual(values = c("#26185F", "#18BDB0"))+
+  scale_colour_manual(values = c("#26185F","#18BDB0"))+
+  scale_shape_manual(values = c(25,22))
+
+ggplot(mw2021_adult, aes(x=OE_strain, y=AdultLongevity, fill=Milkweed)) + 
+  geom_boxplot()+
+  labs(fill = "Milkweed", x = "infection treatment", y = "adult starvation resistance (longevity in days))")+
+  theme_bw()+
+  scale_fill_manual(values = c("darkgreen", "orange"))
+```
+
+#####################################################
+**infection outcomes**
+
+#infection probability
+```{r}
+#strains used in each treatment
+oestrain_treat<-mw.inoc %>% 
+  group_by(Temp, Milkweed, OE_strain) %>% 
+  summarise(OE_st_ct<-n()) 
+
+mw.inoc1<-filter(mw.inoc, !is.na(PupalMass))
+mw.inoc1<-filter(mw.inoc1, !is.na(Sex))
+mw.inoc1$Milkweed<-as.factor(mw.inoc1$Milkweed)
+mw.inoc1$Temp<-as.factor(mw.inoc1$Temp)
+
+m0<-glm(InfectionStatus ~ 1, data = mw.inoc1, family = binomial)
+m1<-glm(InfectionStatus ~ Temp + Milkweed + OE_strain + Sex + PupalMass, data = mw.inoc1, family = binomial)
+m2<-glm(InfectionStatus ~ Temp*Milkweed + Sex + PupalMass + OE_strain, data = mw.inoc1, family = binomial)
+
+AICc(m0,m1,m2)#model with main effects better than null
+
+summary(m1)
+
+tab_model(m1, transform = NULL, show.stat = TRUE, show.se = TRUE, show.ci = FALSE) #OE strain matters, and temp is marginally non-significant (p= 0.056)
+
+#calculate McFadden's or Tjur's R-squared for model
+PseudoR2(m1,which="McFadden") #0.104
+PseudoR2(m1,which="Nagelkerke") #0.154
+PseudoR2(m1,which="Tjur")#0.111 - in table
+
+#model with interaction
+em <- emmeans(m2, specs ="Temp", by ="Milkweed")
+contrast(em, "pairwise", adjust = "Tukey")
+#model without interaction
+em <- emmeans(m1, ~ Temp)
+pairs(em, simple = "Temp")
+
+require("ggplot2")
+emmip(m2, Milkweed ~ Temp, CIs = TRUE, type = "response") +
+  theme_bw()+
+  scale_colour_manual(values = c("darkgreen","orange"))
+
+
+#ggplot
+infsuccess <-  #table of infection success by treatment 
+  mw.inoc1  %>% 
+  group_by(Temp, Milkweed) %>% 
+  dplyr::summarise(propinf_all= sum(InfectionStatus, na.rm=T)/n(),
+  seprop_all = sqrt(propinf_all*(1-propinf_all)/n()))
+
+infsuccess$Temp<-as.factor(infsuccess$Temp)
+
+#of those inoculated what proportion became infected by treatment?
+
+# ggplot(infsuccess, aes(x=Temp, y=propinf_all)) + 
+#   theme_bw()+
+#   geom_errorbar(data = infsuccess, aes(ymin=propinf_all-seprop_all, 
+#                                        ymax=propinf_all+seprop_all, colour=Milkweed),
+#                 width=0.1, position=position_dodge(0.2))+
+#   geom_dotplot(aes(fill=Milkweed), binwidth = 0.03, binaxis='y', stackdir='center',dotsize = 0.5,
+#                position=position_dodge(0.2))+
+#   labs(fill = "Milkweed", x = "temperature treatment", y = "infection probability")+
+#   scale_fill_manual(values = c("darkgreen","darkorange"))+
+#   scale_colour_manual(values = c("darkgreen","darkorange"))
+
+ggplot(infsuccess, aes(x=Temp, y=propinf_all)) + 
+  theme_bw()+
+  geom_errorbar(data = infsuccess, aes(ymin=propinf_all-seprop_all, 
+                                       ymax=propinf_all+seprop_all, colour=Milkweed),
+                width=0.1, position=position_dodge(0.2))+
+  geom_point(aes(Temp,propinf_all, colour=Milkweed, shape=Milkweed),
+               position=position_dodge(0.2), cex=3)+
+  # geom_dotplot(aes(colour=Milkweed, fill=Milkweed), binwidth = 0.03, binaxis='y', stackdir='center',dotsize = 0.5, position=position_dodge(0.2))+
+  labs(fill = "Milkweed", x = "temperature treatment", y = "infection probability")+
+  scale_fill_manual(values = c("darkgreen","darkorange"))+
+  scale_colour_manual(values = c("darkgreen","darkorange"))
+
+
+```
+
+## Spore load
+```{r}
+##log10 transformed
+m0<-lm(LogOE ~ 1, data = mw.inoc1)
+m1<-lm(LogOE ~ Temp + Milkweed + OE_strain + Sex + PupalMass, data = mw.inoc1)
+m2<-lm(LogOE ~ Temp*Milkweed + Sex + PupalMass + OE_strain, data = mw.inoc1)
+
+AICc(m0,m1,m2)#model with interaction is best
+
+summary(m2) #interaction signif: p= 0.0393; OE strain signif p=0.03...
+
+em <- emmeans(m2, specs ="Temp", by ="Milkweed")
+contrast(em, "pairwise", adjust = "Tukey")
+
+emmip(m2, Milkweed ~ Temp, CIs = TRUE, type = "response") +
+  theme_bw()+
+  scale_colour_manual(values = c("darkgreen","orange"))
+
+
+plot(m2) #not very normal qq plot; might need to consider another transformation or dist
+
+##########################################################################
+#cube root transformed
+m0<-lm((OE_5ml)^(1/3) ~ 1, data = mw.inoc1)
+m1<-lm((OE_5ml)^(1/3) ~ Temp + Milkweed + OE_strain + Sex + PupalMass, data = mw.inoc1)
+m2<-lm((OE_5ml)^(1/3) ~ Temp*Milkweed + OE_strain + Sex + PupalMass, data = mw.inoc1)
+
+
+AICc(m0,m1,m2)
+#neither is better than null
+
+plot(m2)# better qq plot
+hist(m2$residuals)
+
+summary(m2)
+tab_model(m2, transform = NULL, show.stat = TRUE, show.se = TRUE, show.ci = FALSE)
+
+# em <- emmeans(m2, specs ="Temp", by ="Milkweed")
+# contrast(em, "pairwise", adjust = "Tukey")
+# 
+# emmip(m2, Milkweed ~ Temp, CIs = TRUE, type = "response") +
+#   theme_bw()+
+#   scale_colour_manual(values = c("darkgreen","orange"))
+
+
+##########################################
+
+ggplot(mw.inoc1, aes(x=Temp, y=LogOE, fill=Milkweed)) + 
+  geom_boxplot(alpha=0.6)+
+  geom_jitter(position = position_jitterdodge(jitter.height = 0.01, 
+              jitter.width = 0.3), alpha=0.7, aes(colour=Milkweed))+
+  labs(fill = "Milkweed", x = "temperature treatment", y = "parasite load (log10(spores/monarch))")+
+  theme_bw()+
+  scale_fill_manual(values = c("darkgreen", "orange"))+
+  scale_colour_manual(values = c("darkgreen","orange"))
+
+
+ggplot(mw.inoc1, aes(x=Temp, y=(OE_5ml)^(1/3), fill=Milkweed)) +
+  geom_boxplot(alpha=0.6, outliers = FALSE)+
+  geom_jitter(position = position_jitterdodge(jitter.height = 0.01,
+              jitter.width = 0.3), alpha=0.7, aes(colour=Milkweed))+
+  labs(fill = "Milkweed", x = "temperature treatment", y = "parasite load (cube root(spores/monarch))")+
+  theme_bw()+
+  scale_fill_manual(values = c("darkgreen", "orange"))+
+  scale_colour_manual(values = c("darkgreen","orange"))
+
+
+# Clean data for plotting
+mw.inoc1_clean <- mw.inoc1 %>%
+  filter(!is.na(OE_5ml))  # Remove NA values for plotting
+
+y_breaks <- c(0, 1000, 50000, 500000, 1000000, 2500000)
+
+# adjust; cube root of 0 is 0
+breaks_transformed <- c(0, y_breaks[-1]^(1/3))
+labels_formatted <- scales::comma(y_breaks)
+
+ggplot(mw.inoc1_clean, aes(x=Temp, 
+                           y=ifelse(OE_5ml==0,0,(OE_5ml)^(1/3)), 
+                           fill=Milkweed)) + 
+  geom_boxplot(alpha=0.6, outliers = FALSE)+
+  geom_jitter(position = position_jitterdodge(jitter.height = 0.01, 
+              jitter.width = 0.3), alpha=0.7, 
+              aes(colour=Milkweed, shape=Milkweed))+
+  labs(fill = "Milkweed", x = "temperature treatment", y = "parasite load (spores/monarch)")+
+  theme_bw()+
+  # scale_y_continuous(
+  #   breaks = y_breaks^(1/3),
+  #   labels = scales::comma(y_breaks)) +
+  scale_y_continuous(
+    breaks = breaks_transformed,
+    labels = labels_formatted) +
+  theme(axis.text.y = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("darkgreen", "orange"))+
+  scale_colour_manual(values = c("darkgreen","orange"))
+
+
+################################
+#performance::check_heteroscedasticity(m2)
+#shapiro.test(m2$residuals)
+
+```
+
+##Adult longevity - spore load relationship
+```{r}
+mw2021.1<-filter(mw2021, !is.na(PupalMass))
+mw2021.1<-filter(mw2021.1, !is.na(Sex))
+mw2021.1$LogOE<-ifelse(!is.na(mw2021.1$LogOE),mw2021.1$LogOE,0)
+mw2021.1$OE_5ml<-ifelse(!is.na(mw2021.1$OE_5ml),mw2021.1$OE_5ml,0)
+
+##########################
+#log10 of longevity with guassian distribution
+m0<-lm(log10(AdultLongevity) ~ 1, data = mw2021.1)
+m1<-lm(log10(AdultLongevity) ~ sqrt(OE_5ml) + InfectionStatus + Sex + PupalMass + Temp + Milkweed, data = mw2021.1)
+m2<-lm(log10(AdultLongevity) ~ sqrt(OE_5ml)*Temp + Milkweed + InfectionStatus + Sex + PupalMass, data = mw2021.1)
+m3<-lm(log10(AdultLongevity) ~ sqrt(OE_5ml)*Milkweed + Temp + InfectionStatus + Sex + PupalMass, data = mw2021.1)
+
+
+AICc(m0,m1,m2,m3)#model with OE-temp interaction signif better than null with just main effects
+
+summary(m2) #OE load, pupal mass, milkweed, and temp*OEload interaction signif
+tab_model(m2, transform = NULL, show.stat = TRUE, show.se = TRUE, show.ci = FALSE)
+
+#model check
+plot(m2)
+shapiro.test(resid(m2)) #normal residuals
+bptest(m2) #homogeneity
+overdisp_fun(m2) #not overdispersed
+
+ggplot(mw2021.1, aes(x=sqrt(OE_5ml), y=log10(AdultLongevity))) +
+  geom_smooth(aes(colour=Temp, fill=Temp), method = "lm")+
+  geom_point(aes(colour=Temp))+
+  labs(fill = "Temp", x = "parasite load (sqrt(spores/monarch))", y = "adult starvation resistance (log10(days))")+
+  theme_bw()+
+  scale_colour_manual(values = c("#26185F", "#18BDB0"))+
+  scale_fill_manual(values = c("#26185F", "#18BDB0"))+
+  scale_shape_manual(values = c(25,22))
+
+#adjust axes:
+x_breaks <- c(0, 50000, 500000, 1000000, 2500000) #
+x_breaks_transformed <- c(0, sqrt(x_breaks[-1]))
+
+y_breaks <- c(0,5,10,15,20,25,30)
+
+ggplot(mw2021.1, aes(x=sqrt(OE_5ml), y=(AdultLongevity))) + 
+  geom_smooth(aes(colour=Temp, fill=Temp), method = "lm")+
+  geom_point(aes(colour=Temp, fill = Temp, shape=Temp))+
+  labs(fill = "Temp", x = "parasite load (spores/monarch)", y = "adult starvation resistance (days)")+
+  theme_bw()+
+  scale_x_continuous(
+    breaks = x_breaks_transformed,
+    labels = scales::comma(x_breaks)
+  ) +
+  scale_y_log10(
+    breaks = y_breaks,
+    labels = y_breaks
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_colour_manual(values = c("#26185F", "#18BDB0"))+
+  scale_fill_manual(values = c("#26185F", "#18BDB0"))+
+  scale_shape_manual(values = c(25,22))
+
+
+```
+
+##########################################################################
+
+**Plant responses to temperature**
+
+## mean C:N ratio in ambient vs elevated
+```{r}
+m0<-lm(CtoN ~ 1, data=mw2021)
+m1<-lm(CtoN ~ Temp + Milkweed, data=mw2021)
+m2<-lm(CtoN ~ Temp*Milkweed, data=mw2021)
+
+AICc(m0,m1,m2) 
+
+#interaction is marginally significant
+summary(m2) #temp, milkweed, and the interaction all predict C:N
+tab_model(m2, transform = NULL, show.stat = TRUE, show.se = TRUE, show.ci = FALSE)
+
+plot(m2)
+
+#summary table for C:N ratio
+CtoN_treatments <-
+  mw2021 %>% 
+  group_by(Temp, Milkweed) %>% 
+  dplyr::summarise(mean_CtoN = mean(CtoN, na.rm=T),
+                   se_CtoN= sd(CtoN, na.rm = T)/sqrt(n()))
+
+ggplot(CtoN_treatments, aes(x=Temp, y=mean_CtoN, fill=Milkweed)) + 
+  geom_bar(stat="identity", 
+           position=position_dodge(), alpha=0.8) +
+  geom_errorbar(aes(ymin=mean_CtoN-se_CtoN, ymax=mean_CtoN+se_CtoN), width=.2,
+                 position=position_dodge(.9))+
+  labs(x = "temperature treatment", y = "C:N")+
+  theme_bw()+
+  scale_fill_manual(values = c("darkgreen","orange"))
+
+```
+
+## mean cardenolide concentration and polarity in tropical plants (ambient vs. elevated)
+```{r}
+card_am_el_tropical<-
+  cardenolides  %>% 
+  group_by(Temp) %>% 
+  dplyr::summarise( mean_concentration= mean(total.card.conc, na.rm = T),
+                    se = sd(total.card.conc, na.rm = T)/sqrt(n()),
+                    mean_polarity = mean(sum.of.polarity, na.rm=T),
+                    se_pol = sd(sum.of.polarity, na.rm = T)/sqrt(n()))
+
+################
+#Go forward excluding 0s
+cardenolides_nozero_tropical<-filter(cardenolides, total.card.conc>0)
+
+card_am_el_tropical<-
+  cardenolides_nozero_tropical  %>% 
+  group_by(Temp) %>% 
+  dplyr::summarise( mean_concentration= mean(total.card.conc, na.rm = T),
+                    se = sd(total.card.conc, na.rm = T)/sqrt(n()),
+                    N_sampes = n(),
+                    mean_polarity = mean(sum.of.polarity, na.rm=T),
+                    se_pol = sd(sum.of.polarity, na.rm = T)/sqrt(n()))
+
+
+ggplot(card_am_el_tropical, aes(x=factor(Temp), y=mean_concentration, fill=Temp)) + 
+  geom_bar(stat="identity", 
+           position=position_dodge(), alpha=0.8) +
+  geom_errorbar(aes(ymin=mean_concentration-se, ymax=mean_concentration+se), width=.2,
+                 position=position_dodge(.9))+
+  theme_bw()+
+  labs(x = "temperature treatment", y = "cardenolide concentration (mg/g dry mass)")+
+  scale_fill_manual(values = c("#26185F","#18BDB0"))
+
+
+ggplot(card_am_el_tropical, aes(x=factor(Temp), y=mean_polarity, fill=Temp)) + 
+  geom_bar(stat="identity", 
+           position=position_dodge(), alpha=0.8) +
+  geom_errorbar(aes(ymin=mean_polarity-se_pol, ymax=mean_polarity+se_pol), width=.2,
+                 position=position_dodge(.9))+
+  labs(x = "Temperature (C)", y = "Average polarity ()")+
+  scale_fill_manual(values = c("#26185F","#18BDB0"))
+
+#################################################
+
+norm<-cardenolides %>%
+  group_by(Temp) %>%
+  rstatix::shapiro_test(total.card.conc) #not normally dist - use wilcox
+
+var<-cardenolides %>% rstatix::levene_test(total.card.conc ~ Temp) #equal variance
+
+#ttest<-t.test(cardenolides$total.card.conc ~ cardenolides$Temp)
+#difference in mean cardenolide concentration is not significantly different from 0
+wtest<-wilcox.test(cardenolides$total.card.conc ~ cardenolides$Temp, alternative = "two.sided") #difference in card concentration not different from 0
+wtest
+
+norm<-cardenolides %>%
+  group_by(Temp) %>%
+  rstatix::shapiro_test(sum.of.polarity) #not normally dist - use wilcox
+
+var<-cardenolides %>% rstatix::levene_test(sum.of.polarity ~ Temp) #equal variance
+
+#ttest<-t.test(cardenolides$sum.of.polarity ~ cardenolides$Temp)
+#difference in mean polarity is not significantly different from 0
+wtest<-wilcox.test(cardenolides$sum.of.polarity ~ cardenolides$Temp, alternative = "two.sided")
+wtest
+#difference in mean polarity is not significantly different from 0
+```
