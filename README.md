@@ -3,6 +3,8 @@
 **Authors:**
 
 **Files:**
+### "MW_warming_Jul_2025.rmd"
+Updated version of "MW_warming_Nov_2024.rmd" Data analysis for a 2021 field experiment exploring the effects of elevated temperature, milkweed host plant species, and the interaction between milkweed and temperature on monarch traits and infection. This version contains the most up-to-date figures.
 ### "MW_warming_Nov_2024.rmd"
 Data analysis for a 2021 field experiment exploring the effects of elevated temperature, milkweed host plant species, and the interaction between milkweed and temperature on monarch traits and infection.
 
