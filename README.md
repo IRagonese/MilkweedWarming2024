@@ -1,6 +1,16 @@
 # MilkweedWarming2024
 
-**Authors:**
+**Authors:** 
+Ragonese, Isabella (1,2); Brandon, Christopher (3); Chavez, Joselyne (4); de Roode, Jacobus (5); Hall, Richard (2); Altizer, Sonia (2)  
+
+*Author affiliations*  
+(1) University of Massachusetts Amherst
+(2) University of Georgia
+(3) Colorado State University
+(4) Brown University
+(5) Emory University  
+
+**See Dryad Digital Repository**: https://doi.org/10.5061/dryad.prr4xgxx7 
 
 **Files:**
 ### "MW_warming_Jul_2025.rmd"
