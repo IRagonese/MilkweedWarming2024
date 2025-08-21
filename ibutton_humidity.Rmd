@@ -1,0 +1,168 @@
+---
+title: "iButton_humidity"
+author: "Isabella Ragonese"
+date: "2024-10-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(rstatix)
+library(ggpubr)
+library(lubridate)
+library(Hmisc)
+library(lme4)
+library(glmmTMB)
+library(sjPlot)
+library(car)
+library(MuMIn)
+library(MASS)
+```
+
+## Humidity
+
+#read in raw data with ambient and elevated ibutton readings
+```{r}
+AmbientRH<-read.csv("AverageAmbient_RelHum.csv")
+ElevatedRH<-read.csv("AverageElevated_RelHum.csv")
+```
+
+#transform dataframes to long format
+```{r}
+A1<-mutate(AmbientRH, Temp_treatment = "Ambient")
+E1<-mutate(ElevatedRH, Temp_treatment = "Elevated")
+
+
+A1long<-pivot_longer(A1,
+     cols = c("H1","H6","H7","H8", "H11","H12"),
+     names_to = "ibuttonID",
+     values_to ="RH")
+
+E1long<-pivot_longer(E1,
+                     cols = c("H2","H3","H4","H5","H9","H10"),
+                     names_to = "ibuttonID",
+                     values_to ="RH")
+A1long<-A1long[,-4]
+E1long<-E1long[,-4]
+
+
+
+A1_E1_long<-rbind(A1long,E1long)
+
+A1_E1_long$Date<-as.Date.character(A1_E1_long$Date.Time, tryFormats ="%m/%d/%Y %H:%M")
+
+#day vs. night temps 
+dates<-A1_E1_long$Date.Time
+dates2 <- as.POSIXct(dates, format = "%m/%d/%Y %H:%M")
+A1_E1_long$Hour<-format(dates2, format="%H")
+A1_E1_long$Hour<-as.numeric(A1_E1_long$Hour)
+
+A1_E1_long$DayNight<-ifelse((A1_E1_long$Hour>6 & A1_E1_long$Hour<20),"Day","Night") #7am-7pm
+
+Am_El_day<-A1_E1_long %>% filter(DayNight=="Day")
+Am_El_night<-A1_E1_long %>% filter(DayNight=="Night")
+
+```
+
+#create df for mean and sd temp for each DAY
+```{r}
+per_ibutton_Date_avgRH<-A1_E1_long %>%
+  group_by(ibuttonID, Temp_treatment, Date) %>%
+  get_summary_stats(RH, type = "mean_sd")
+  
+
+per_ibutton_Date_avgRH$se=per_ibutton_Date_avgRH$sd/sqrt(per_ibutton_Date_avgRH$n)
+
+
+per_ibutton_Date_avgRH=filter(per_ibutton_Date_avgRH,Date!="2021-06-14")
+#per_ibutton_Date_avgRH=filter(per_ibutton_Date_avgRH,ibutton_ID!="H2")
+
+ggplot(per_ibutton_Date_avgRH, aes(x=Date,y=mean,group=ibuttonID,color=Temp_treatment))+
+  geom_line()+
+  #geom_ribbon(aes(y=mean, ymin=mean-se, ymax=mean+se, fill=Temp_treatment), alpha=.2)+
+  labs(x="Date",y="Percent Relative Humidity")+
+  scale_color_manual(values = c("blue","goldenrod"))
+
+```
+
+#mean se plot
+```{r}
+Treat_Date_avgRH<-A1_E1_long %>%
+  group_by(Temp_treatment, Date) %>%
+  get_summary_stats(RH, type = "mean_sd")
+
+Treat_Date_avgRH$se=Treat_Date_avgRH$sd/sqrt(Treat_Date_avgRH$n)
+
+Treat_Date_avgRH=filter(Treat_Date_avgRH,Date!="2021-06-14") #pre-field date
+
+ggplot(Treat_Date_avgRH, aes(x=Date,y=mean))+
+  geom_line(aes(color=Temp_treatment))+
+  geom_ribbon(aes(y=mean, ymin=mean-se, ymax=mean+se, fill=Temp_treatment), alpha=0.3)+
+  theme_bw()+
+  labs(x="Date",y="mean daily %Relative Humidity (+/- standared error)")+
+  scale_color_manual(values = c("blue","goldenrod"))+
+  scale_fill_manual(values = c("blue","goldenrod"))
+```
+
+
+#repeated measures anova compare ambient and elevated mean daily %RH accounting for ibutton_ID
+http://agroninfotech.blogspot.com/2020/06/two-way-repeated-measures-analysis-in-r.html  
+```{r}
+#make temperature treatment and date factors
+per_ibutton_Date_avgRH$Temp_F<-as.factor(per_ibutton_Date_avgRH$Temp_treatment)#2 temps
+per_ibutton_Date_avgRH$timestep_F<-as.factor(per_ibutton_Date_avgRH$Date) #22 days
+
+na.omit(per_ibutton_Date_avgRH, cols=c(mean, Temp_F, timestep_F, ibutton_ID))
+
+#model.aov <- aov(mean ~ Temp_F*timestep_F + Error(ibutton_ID/(timestep_F)), data=per_ibutton_Date_avgRH) #each ibutton only experienced either Elevated or Ambient temps...
+#summary(model.aov)
+
+#mod.lm<-lmer(mean ~ Temp_F*timestep_F + (1|ibutton_ID), data=per_ibutton_Date_avgRH)
+
+date_treatment_RHavg<-per_ibutton_Date_avgRH %>% 
+  group_by(Date, Temp_treatment) %>% 
+  summarise(ibutton_count<-n()) #each treatment x date combo has 15 (or 14 -->remove h1 and h2) temperature measures...
+########################################################
+
+# per_ibutton_Date_avgRH %>% filter(Date<"2021-06-26") %>% ggqqplot("mean", facet.by = "timestep_F")
+# per_ibutton_Date_avgRH %>% filter(Date>"2021-06-20") %>% ggqqplot("mean", facet.by = "timestep_F")
+
+per_ibutton_Date_avgRH$timestep_count<-as.factor(rep(1:22, 12)) #22 unique days; 12 ibuttons
+
+#sphericity assumption?
+res.aov <- aov(mean ~ timestep_count*Temp_F + Error(ibuttonID),
+data = per_ibutton_Date_avgRH)
+
+summary(res.aov)
+
+#anova_test(data=per_ibutton_Date_avgRH,dv=mean,wid=ibutton_ID,within=c("Temp_F","timestep_F")) #tries to cbind for some reason...
+
+###############################
+#per_ibutton_Date_avgRH<-filter(per_ibutton_Date_avgRH, ibutton_ID!="H1") #remove H2 and H1 to make even ambient and elevated plots
+
+pwc <- per_ibutton_Date_avgRH %>%
+group_by(timestep_F) %>%
+pairwise_t_test(
+mean ~ Temp_F, paired = TRUE,
+p.adjust.method = "bonferroni"
+)
+data.frame(pwc)
+
+#looks like ambient and elevated plots do not differ significantly in average %RH for any of the days
+
+```
+
+#
+```{r}
+model.aov <- aov(mean ~ Temp_treatment*Date + Error(ibuttonID/(Date)), data=per_ibutton_Date_avgRH)
+summary(model.aov)
+
+```
+
