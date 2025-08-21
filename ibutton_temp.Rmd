@@ -41,12 +41,12 @@ E1<-mutate(Elevated, Temp_treatment = "Elevated")
 E1$Stdev = E1$StandardDev
 
 A1long<-pivot_longer(A1,
-     cols = c("H1_temp","H6_10min_ahead","H7_11min_ahead","H8_3min_ahead", "H11_3min_behind","H12_2min_behind", "T1_5min_behind","T2_8min_ahead","T3_8min_ahead","T11_5min_ahead","T12_2min_behind","T13_8min_behind","T14_9min_ahead","T15_6min_behind","T17_7min_ahead" ),
+     cols = c("H1","H6","H7","H8", "H11","H12", "T1","T2","T3","T11","T12","T13","T14","T15","T17" ),
      names_to = "ibuttonID",
      values_to ="Temp")
 
 E1long<-pivot_longer(E1,
-                     cols = c("H2_temp","H3_9min_ahead","H4_match","H5_1min_ahead","H9_1min_ahead","H10_6min_ahead","T4_2min_behind","T5_4min_behind","T6_5min_ahead","T8_9min_ahead","T9_3min_ahead","T16_8min_behind","T18_3min_ahead","T19_6min_behind","T20_1min_behind"),
+                     cols = c("H2","H3","H4","H5","H9","H10","T4","T5","T6","T8","T9","T16","T18","T19","T20"),
                      names_to = "ibuttonID",
                      values_to ="Temp")
 A1long<-A1long[,-4]
@@ -136,7 +136,7 @@ per_ibutton_avgtemps_full<-A1_E1_long %>%
   group_by(ibuttonID, Temp_treatment) %>%
   get_summary_stats(Temp, type = "mean_sd")
 
-per_ibutton_avgtemps_full = per_ibutton_avgtemps_full %>% separate(col=ibuttonID,into = c("ibutton_ID", "lag","relative"), "_")
+
 per_ibutton_avgtemps_full$se=per_ibutton_avgtemps_full$sd/sqrt(per_ibutton_avgtemps_full$n)
 
 #won't work without H2
@@ -149,9 +149,9 @@ per_ibutton_avgtemps_full$se=per_ibutton_avgtemps_full$sd/sqrt(per_ibutton_avgte
 button_order<-c("T12","T15","H7","H1","T2","H11","H12","T1","T13","H6","T3","T14","T17","T11","H8","T6","T9","H2","T8","H3","H10","T18","H9","T20","H5","H4","T4","T5","T19","T16")
 
 ggplot(per_ibutton_avgtemps_full)+
-geom_bar(aes(x = factor(ibutton_ID, button_order), y = mean, 
+geom_bar(aes(x = factor(ibuttonID, button_order), y = mean, 
              fill = Temp_treatment), stat = "identity", show.legend = FALSE)+
-  geom_errorbar(aes(x=ibutton_ID, y=mean, ymin=mean-se, ymax=mean+se), width=0.5)+
+  geom_errorbar(aes(x=ibuttonID, y=mean, ymin=mean-se, ymax=mean+se), width=0.5)+
   labs(x="ibutton",y="mean temperature")+
   scale_fill_manual(values = c("blue","goldenrod"))
 
@@ -166,14 +166,13 @@ per_ibutton_Date_avgtemps<-A1_E1_long %>%
 
 per_ibutton_Date_avgtemps$se=per_ibutton_Date_avgtemps$sd/sqrt(per_ibutton_Date_avgtemps$n)
 
-per_ibutton_Date_avgtemps = per_ibutton_Date_avgtemps %>% separate(col=ibuttonID,into = c("ibutton_ID", "lag","relative"), "_")
 
 per_ibutton_Date_avgtemps=filter(per_ibutton_Date_avgtemps,Date!="2021-06-14")
 
 # per_ibutton_Date_avgtemps=filter(per_ibutton_Date_avgtemps,ibutton_ID!="H2")
 # per_ibutton_Date_avgtemps=filter(per_ibutton_Date_avgtemps,ibutton_ID!="H1")
 
-ggplot(per_ibutton_Date_avgtemps, aes(x=Date,y=mean,group=ibutton_ID,color=Temp_treatment))+
+ggplot(per_ibutton_Date_avgtemps, aes(x=Date,y=mean,group=ibuttonID,color=Temp_treatment))+
   geom_line()+
   #geom_ribbon(aes(y=mean, ymin=mean-se, ymax=mean+se, fill=Temp_treatment), alpha=.2)+
   labs(x="Date",y="mean temperature")+
@@ -181,7 +180,7 @@ ggplot(per_ibutton_Date_avgtemps, aes(x=Date,y=mean,group=ibutton_ID,color=Temp_
 
 ```
 
-#repeated measures anova compare ambient and elevated mean daily temp accounting for ibutton_ID
+#repeated measures anova compare ambient and elevated mean daily temp accounting for ibuttonID
 http://agroninfotech.blogspot.com/2020/06/two-way-repeated-measures-analysis-in-r.html  
 ```{r}
 
@@ -207,17 +206,17 @@ data.frame(pwc) #each day, mean temp in ambient plots is different from elevated
 
 #Am_El_day = Am_El_day %>% separate(col=ibuttonID,into = c("ibutton_ID", "lag","relative"), "_")
 #Am_El_day <- filter(Am_El_day, ibutton_ID!="H1"&ibutton_ID!="H2")
-Am_El_day <- filter(Am_El_day, ibutton_ID!="H2")
+Am_El_day <- filter(Am_El_day, ibuttonID!="H2")
 
-model.aov <- aov(Temp ~ Temp_treatment*Date + Error(ibutton_ID/(Date)), data=Am_El_day)
+model.aov <- aov(Temp ~ Temp_treatment*Date + Error(ibuttonID/(Date)), data=Am_El_day)
 summary(model.aov)
 
 #Am_El_night = Am_El_night %>% separate(col=ibuttonID,into = c("ibutton_ID", "lag","relative"), "_")
 #Am_El_night <- filter(Am_El_night, ibutton_ID!="H1"&ibutton_ID!="H2")
-Am_El_night <- filter(Am_El_night, ibutton_ID!="H2")
+Am_El_night <- filter(Am_El_night, ibuttonID!="H2")
 
 
-model.aov <- aov(Temp ~ Temp_treatment*Date + Error(ibutton_ID/(Date)), data=Am_El_night)
+model.aov <- aov(Temp ~ Temp_treatment*Date + Error(ibuttonID/(Date)), data=Am_El_night)
 summary(model.aov)
 
 meantempday<-Am_El_day %>% group_by(Temp_treatment) %>% 
@@ -228,7 +227,7 @@ meantempnight<-Am_El_night %>% group_by(Temp_treatment) %>%
   summarise(meanTemp=mean(Temp),
             seTemp=sd(Temp)/sqrt(n()))
 
-model.aov <- aov(mean ~ Temp_treatment*Date + Error(ibutton_ID/(Date)), data=per_ibutton_Date_avgtemps)
+model.aov <- aov(mean ~ Temp_treatment*Date + Error(ibuttonID/(Date)), data=per_ibutton_Date_avgtemps)
 summary(model.aov)
 
 ```
